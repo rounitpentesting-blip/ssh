@@ -3,7 +3,7 @@ setlocal EnableDelayedExpansion
 
 :: ============================================================
 :: Windows Secure Node - Full Auto Setup
-:: Uses Your GitHub Tailscale Installer + SSH Setup
+:: Auto Downloads Tailscale (Official Link) + SSH Setup
 :: Run as Administrator
 :: ============================================================
 
@@ -19,29 +19,31 @@ echo ================================================
 echo.
 
 :: ============================================================
-:: STEP 0 - Download & Install Tailscale from YOUR GitHub
+:: STEP 0 - Download & Install Tailscale if not present
 :: ============================================================
 set "InstalledNow=0"
 
 if not exist "%TsBin%" (
-    echo [0/7] Tailscale not found. Downloading from your GitHub...
+    echo [0/7] Tailscale not found. Downloading official latest version...
 
     powershell -NoProfile -Command ^
-        "Invoke-WebRequest -Uri 'https://github.com/rounitpentesting-blip/tailscale/raw/refs/heads/main/tailscale-setup-1.96.3.exe' ^
-         -OutFile '%TsInstaller%' -UseBasicParsing -TimeoutSec 120"
+        "Invoke-WebRequest -Uri 'https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe' ^
+         -OutFile '%TsInstaller%' -UseBasicParsing -TimeoutSec 120 -MaximumRedirection 10"
 
     if exist "%TsInstaller%" (
         echo   Installing Tailscale silently...
         "%TsInstaller%" /quiet /norestart
-        echo   Waiting for installation to complete...
-        timeout /t 15 /nobreak >nul
+        
+        echo   Waiting for Tailscale to install completely...
+        timeout /t 20 /nobreak >nul
         del "%TsInstaller%" /f /q >nul 2>&1
+        
         set "InstalledNow=1"
         echo   Tailscale installed successfully.
     ) else (
         echo.
-        echo ERROR: Failed to download Tailscale from your GitHub link.
-        echo Please check the link and try again.
+        echo ERROR: Failed to download Tailscale.
+        echo Please download manually from https://tailscale.com/download
         pause
         exit /b 1
     )
@@ -49,16 +51,17 @@ if not exist "%TsBin%" (
     echo [0/7] Tailscale is already installed.
 )
 
-:: Extra wait if freshly installed
+:: Extra wait if Tailscale was just installed
 if %InstalledNow%==1 (
     echo   Finalizing Tailscale setup...
-    timeout /t 8 /nobreak >nul
+    timeout /t 10 /nobreak >nul
 )
 
 :: ============================================================
 :: STEP 1 - Connect to Tailscale
 :: ============================================================
 echo [1/7] Connecting to Tailscale network...
+
 "%TsBin%" status >nul 2>&1
 if %errorlevel% neq 0 (
     echo   Joining your Tailscale network...
@@ -67,6 +70,7 @@ if %errorlevel% neq 0 (
     echo   Already connected. Re-authenticating...
     "%TsBin%" up --authkey %AuthKey% --reset --accept-routes --accept-dns
 )
+
 timeout /t 5 /nobreak >nul
 
 set "tsIP=Not found"
@@ -79,7 +83,7 @@ echo.
 :: ============================================================
 :: STEP 2-7 - Boot task, OpenSSH, SSH key, config, firewall
 :: ============================================================
-echo [2/7] Setting Tailscale auto-start and boot task...
+echo [2/7] Setting Tailscale boot task...
 sc config Tailscale start= auto >nul 2>&1
 schtasks /Delete /TN "TailscaleAutoConnect" /F >nul 2>&1
 schtasks /Create /TN "TailscaleAutoConnect" /SC ONSTART /DELAY 0001:00 /RU SYSTEM /RL HIGHEST /F ^
@@ -102,10 +106,8 @@ if %needsAction%==1 (
     echo   Installing/Upgrading OpenSSH...
     powershell -NoProfile -Command "Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0" >nul 2>&1
     if errorlevel 1 (
-        echo   Falling back to latest OpenSSH...
-        powershell -NoProfile -Command ^
-            "Invoke-WebRequest -Uri 'https://github.com/PowerShell/Win32-OpenSSH/releases/latest/download/OpenSSH-Win64.zip' ^
-             -OutFile '%TEMP%\openssh.zip' -UseBasicParsing"
+        echo   Downloading latest OpenSSH...
+        powershell -NoProfile -Command "Invoke-WebRequest -Uri 'https://github.com/PowerShell/Win32-OpenSSH/releases/latest/download/OpenSSH-Win64.zip' -OutFile '%TEMP%\openssh.zip' -UseBasicParsing"
         net stop sshd >nul 2>&1
         taskkill /F /IM sshd.exe >nul 2>&1
         timeout /t 3 /nobreak >nul
@@ -124,7 +126,7 @@ if %needsAction%==1 (
 sc config sshd start= auto >nul 2>&1
 net start sshd >nul 2>&1
 
-echo [4/7] Setting up SSH public key...
+echo [4/7] Setting SSH public key...
 set "AdminAuthKeys=C:\ProgramData\ssh\administrators_authorized_keys"
 ( echo %PublicKey% ) > "%AdminAuthKeys%"
 icacls "%AdminAuthKeys%" /inheritance:r >nul 2>&1
@@ -151,7 +153,7 @@ set "sshdConfig=C:\ProgramData\ssh\sshd_config"
 ) > "%sshdConfig%"
 net start sshd >nul 2>&1
 
-echo [6/7] Setting admin rights and firewall...
+echo [6/7] Setting firewall rules...
 net localgroup Administrators "%Username%" /add >nul 2>&1
 
 netsh advfirewall firewall delete rule name="SSH-Allow-Tailscale" >nul 2>&1
@@ -186,8 +188,7 @@ echo Tailscale IP : %finalIP%
 echo Local IP     : %localIP%
 echo Username     : %Username%
 echo.
-echo Full SSH Command (copy this on Kali):
-echo.
+echo Full SSH Command (copy this on your Kali machine):
 echo    ssh %Username%@%finalIP%
 echo.
 echo This node will auto-connect to Tailscale on every boot.
